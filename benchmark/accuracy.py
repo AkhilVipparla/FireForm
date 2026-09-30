@@ -164,12 +164,16 @@ def match_rows(
     remaining = [row for row in extracted_rows if not _is_blank(row)]
     pairs = []
     for index, expected_row in enumerate(expected_rows):
-        scores = [
-            calculate_accuracy(row, expected_row, overrides, f"{path}/{index}", penalize_extras)
-            for row in remaining
-        ]
-        best = max(scores, default=0.0)
-        matched = remaining.pop(scores.index(best)) if best > 0 else None
+        if remaining:
+            scores = [
+                calculate_accuracy(row, expected_row, overrides, f"{path}/{index}", penalize_extras)
+                for row in remaining
+            ]
+            best = max(scores, default=0.0)
+            matched = remaining.pop(scores.index(best))
+        else:
+            best = 0.0
+            matched = None
         pairs.append((expected_row, matched, best))
     return pairs, remaining
 
