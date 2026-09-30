@@ -24,9 +24,8 @@ def _humanize(name: str) -> str:
 
 
 def _extract_pdf_fields(pdf_path: str) -> list[dict] | None:
-    """Fillable widgets in the same order Filler.fill_form writes them
-    (top-to-bottom, left-to-right per page), so seeded rows line up with the
-    fill order. Returns None if the PDF can't be read."""
+    """Fillable widgets in page order (top-to-bottom, left-to-right per page).
+    Returns None if the PDF can't be read."""
     try:
         from pdfrw import PdfReader
         candidate = Path(pdf_path)
