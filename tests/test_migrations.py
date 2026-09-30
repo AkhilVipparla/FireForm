@@ -323,3 +323,10 @@ def test_downgrade_003(alembic_cfg, alembic_engine):
     assert "input_text" in columns
     tables = inspector.get_table_names()
     assert "inputs" in tables
+
+
+def test_alembic_check_no_pending_migrations(alembic_cfg):
+    """Verify that models and migrations are completely in sync (alembic check passes)."""
+    command.upgrade(alembic_cfg, "head")
+    command.check(alembic_cfg)
+
