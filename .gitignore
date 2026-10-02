@@ -37,3 +37,6 @@ reports/
 
 # Benchmark run output
 benchmark/results/
+
+# Local VS Code workspace configuration
+*.code-workspace
