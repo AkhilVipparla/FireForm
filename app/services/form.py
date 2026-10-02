@@ -35,9 +35,33 @@ class FormService:
         self.input_service = InputService()
 
     def fill_form(
-        self, session: Session, template: Template, input_id: UUID, model: str | None = None
+        self,
+        session: Session,
+        template: Template,
+        input_id: UUID | None = None,
+        input_text: str | None = None,
+        model: str | None = None,
     ) -> FormSubmission:
-        transcript = self.input_service.resolve_transcript(session, input_id)
+        if input_id is not None and not input_text:
+            transcript = self.input_service.resolve_transcript(session, input_id)
+        elif input_text:
+            transcript = input_text
+            if input_id is None:
+                from app.models import Input
+                from app.api.schemas.enums import InputStatus, InputType
+                input_record = Input(
+                    input_type=InputType.text,
+                    status=InputStatus.ready,
+                    transcript=input_text,
+                    character_count=len(input_text),
+                    word_count=len(input_text.split()),
+                )
+                session.add(input_record)
+                session.commit()
+                session.refresh(input_record)
+                input_id = input_record.input_id
+        else:
+            raise AppError("Either input_id or input_text is required", status_code=422, error_code="VALIDATION_ERROR")
         return self.fill_and_persist(session, template, transcript, input_id, model)
 
     def fill_and_persist(

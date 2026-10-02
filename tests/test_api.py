@@ -220,6 +220,27 @@ class TestFormEndpoints:
         fetched = db.get(FormSubmission, data["id"])
         assert fetched.input_id == input_id
 
+    def test_fill_form_with_direct_input_text(self, client, mock_controller, db):
+        tpl_id = self._seed_template(client, mock_controller)
+
+        resp = client.post(f"{API_PREFIX}/forms/fill", json={
+            "template_id": tpl_id,
+            "input_text": "Direct incident text narrative from user.",
+        })
+        assert resp.status_code == 200
+
+        data = resp.json()
+        assert data["id"] is not None
+        assert data["template_id"] == tpl_id
+        assert data["input_text"] == "Direct incident text narrative from user."
+        assert data["output_pdf_path"] == "src/outputs/filled_output.pdf"
+
+        fetched = db.get(FormSubmission, data["id"])
+        assert fetched is not None
+        assert fetched.input_text == "Direct incident text narrative from user."
+        assert fetched.input_id is not None
+
+
     def test_fill_form_missing_template(self, client, mock_controller):
         resp = client.post(f"{API_PREFIX}/forms/fill", json={
             "template_id": 9999,

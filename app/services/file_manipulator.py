@@ -46,22 +46,34 @@ class FileManipulator:
         logger.info("[1] Received request from frontend.")
         logger.info("[2] PDF template path: %s", pdf_form_path)
 
-        if not os.path.exists(pdf_form_path):
+        actual_pdf_path = pdf_form_path
+        try:
+            resolved_pdf = paths._resolve_project_file(pdf_form_path)
+            if resolved_pdf.exists():
+                actual_pdf_path = str(resolved_pdf)
+        except Exception:
+            actual_pdf_path = pdf_form_path
+
+        if not os.path.exists(actual_pdf_path):
             raise FileNotFoundError(f"PDF template not found at {pdf_form_path}")
 
         logger.info("[3] Starting extraction and PDF filling process...")
         try:
             output_name = (
-                pdf_form_path[:-4]
+                actual_pdf_path[:-4]
                 + "_"
                 + datetime.now().strftime("%Y%m%d_%H%M%S")
                 + "_filled.pdf"
             )
-            filler.fill(pdf_form_path, user_input, output_name, model)
+            filler.fill(actual_pdf_path, user_input, output_name, model)
 
             logger.info("Process complete. Output saved to: %s", output_name)
 
-            return output_name
+            try:
+                from pathlib import Path
+                return Path(output_name).relative_to(paths.PROJECT_ROOT).as_posix()
+            except Exception:
+                return output_name
 
         except Exception as e:
             logger.error("An error occurred during PDF generation: %s", e)
