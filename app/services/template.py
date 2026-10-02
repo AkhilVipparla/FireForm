@@ -20,15 +20,15 @@ from app.db.repositories import (
     list_templates as repo_list_templates,
 )
 from app.models import Template
-from app.services.controller import Controller
 from app.services.form_filler.template import create_template as extract_pdf_template
 
 
 class TemplateService:
     def __init__(self):
-        self.controller = Controller()
+        pass
 
     def _calculate_field_count(self, fields: dict | None, pdf_path: str = "") -> int | None:
+
         if not fields:
             if pdf_path:
                 return _count_pdf_widgets(pdf_path)
@@ -147,8 +147,16 @@ class TemplateService:
 
 
     def make_fillable(self, resolved_pdf_path: str) -> MakeFillableResponse:
-        new_absolute = self.controller.prepare_fillable(resolved_pdf_path)
-        new_path = Path(new_absolute)
+        template_path = resolved_pdf_path[:-4] + "_template.pdf"
+        try:
+            import os
+            os.environ["CUDA_VISIBLE_DEVICES"] = ""
+            from commonforms import prepare_form
+            prepare_form(resolved_pdf_path, template_path)
+        except Exception:
+            template_path = resolved_pdf_path
+
+        new_path = Path(template_path)
         if not new_path.is_absolute():
             new_path = (paths.PROJECT_ROOT / new_path).resolve()
         relative_path = new_path.relative_to(paths.PROJECT_ROOT).as_posix()
@@ -157,6 +165,7 @@ class TemplateService:
             pdf_path=relative_path,
             field_count=_count_pdf_widgets(relative_path),
         )
+
 
     def delete_template(self, session: Session, template: Template) -> None:
         # Batched like the original route: only session.delete() per row here,
