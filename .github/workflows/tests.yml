@@ -2,9 +2,9 @@ name: Tests
 
 on:
   push:
-    branches: [main, development]
+    branches: [main, development]  # post-merge verification after PRs land
   pull_request:
-    branches: [main, development, 'development-*']
+    branches: [main, development, 'development-*']  # gates all PRs
 
 jobs:
   test:
