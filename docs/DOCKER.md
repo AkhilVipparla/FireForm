@@ -2,6 +2,8 @@
 
 FireForm uses Docker to ensure a consistent environment across different machines.
 
+> **New to FireForm?** Start with the [Setup Guide](1.%20SETUP.md) for the complete first-time development setup. This page is a reference for FireForm's Docker environment and commands.
+
 ## Container Stack
 
 We use three main containers:
