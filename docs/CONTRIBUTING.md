@@ -24,7 +24,7 @@ Open an issue with:
 
 ### Pull Requests
 
-1.  Fork the repo and create your branch from `main`.
+1.  Fork the repo and create your branch from `development`.
 2.  Add tests if you've added new features.
 3.  Ensure the test suite passes.
 4.  Make sure your code lints.
@@ -32,4 +32,4 @@ Open an issue with:
 
 ## 🛠️ Local Development Setup
 
-FireForm uses Docker for development. See the [DOCKER](DOCKER.md) page for more details.
+For the full first-time setup, see the [Setup Guide](1.%20SETUP.md).
