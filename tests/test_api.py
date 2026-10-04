@@ -4,8 +4,12 @@ Covers every endpoint and the full upload → template → fill pipeline.
 All heavy dependencies (LLM, commonforms, filesystem) are mocked via conftest.
 """
 
+from uuid import uuid4
+
 from sqlmodel import select
 
+from app.api.schemas.enums import InputStatus, InputType
+from app.models import Template, FormSubmission, Input
 from app.core.config import API_PREFIX
 from app.models import FormSubmission, Template
 
@@ -40,8 +44,16 @@ class TestDBModels:
         db.commit()
         db.refresh(tpl)
 
+        input_record = Input(
+            input_type=InputType.text, status=InputStatus.ready, transcript="John Doe, firefighter"
+        )
+        db.add(input_record)
+        db.commit()
+        db.refresh(input_record)
+
         sub = FormSubmission(
             template_id=tpl.id,
+            input_id=input_record.input_id,
             input_text="John Doe, firefighter",
             output_pdf_path="src/outputs/filled.pdf",
         )
@@ -52,6 +64,7 @@ class TestDBModels:
         fetched = db.get(FormSubmission, sub.id)
         assert fetched is not None
         assert fetched.template_id == tpl.id
+        assert fetched.input_id == input_record.input_id
         assert fetched.input_text == "John Doe, firefighter"
         assert fetched.created_at is not None
 
@@ -103,10 +116,9 @@ class TestTemplateEndpoints:
         data = resp.json()
         assert data["id"] is not None
         assert data["name"] == "Fire Report"
+        # Fields passed explicitly are persisted as-is (extract_pdf_template not called)
         assert data["fields"]["Location"] == "string"
-        # Plain create just persists the row; commonforms only runs via
-        # the separate /make-fillable endpoint.
-        mock_controller["template_ctrl"].create_template.assert_not_called()
+        mock_controller["mock_extract"].assert_not_called()
 
     def test_create_then_list(self, client, mock_controller):
         """Creating a template should make it appear in the list."""
@@ -125,7 +137,7 @@ class TestTemplateEndpoints:
         # Point the upload directory inside tmp_path (which is inside the project
         # for the path-safety check — we monkeypatch the check).
         monkeypatch.setattr(
-            "app.api.routes.templates.PROJECT_ROOT",
+            "app.core.paths.PROJECT_ROOT",
             tmp_path,
         )
         resp = client.post(
@@ -168,7 +180,7 @@ class TestTemplateEndpoints:
 class TestFormEndpoints:
 
     def _seed_template(self, client, mock_controller):
-        """Helper: create a template and return its ID."""
+        """Helper: create a template with the default stub path and return its ID."""
         resp = client.post(f"{API_PREFIX}/templates/create", json={
             "name": "Employee Form",
             "pdf_path": "src/inputs/employee.pdf",
@@ -179,39 +191,131 @@ class TestFormEndpoints:
         })
         return resp.json()["id"]
 
-    def test_fill_form_success(self, client, mock_controller):
-        tpl_id = self._seed_template(client, mock_controller)
+    def _seed_template_at(self, client, pdf_path: str):
+        """Helper: create a template with a specific pdf_path and return its ID."""
+        resp = client.post(f"{API_PREFIX}/templates/create", json={
+            "name": "Employee Form",
+            "pdf_path": pdf_path,
+            "fields": {
+                "Employee's name": "string",
+                "Employee's email": "string",
+            },
+        })
+        return resp.json()["id"]
+
+    def _seed_input(self, db, status=InputStatus.ready, transcript="The employee is John Doe, email jdoe@ucsc.edu"):
+        """Helper: create an Input row directly and return its UUID."""
+        record = Input(input_type=InputType.text, status=status, transcript=transcript)
+        db.add(record)
+        db.commit()
+        db.refresh(record)
+        return record.input_id
+
+    def test_fill_form_success(self, client, mock_controller, db, tmp_path, monkeypatch):
+        monkeypatch.setattr("app.core.paths.PROJECT_ROOT", tmp_path)
+        # Create a real PDF file so paths._resolve_project_file succeeds
+        pdf_file = tmp_path / "employee.pdf"
+        pdf_file.write_bytes(b"%PDF-1.4 fake")
+        tpl_id = self._seed_template_at(client, str(pdf_file.relative_to(tmp_path)))
+        input_id = self._seed_input(db)
 
         resp = client.post(f"{API_PREFIX}/forms/fill", json={
             "template_id": tpl_id,
-            "input_text": "The employee is John Doe, email jdoe@ucsc.edu",
+            "input_id": str(input_id),
         })
         assert resp.status_code == 200
 
         data = resp.json()
         assert data["id"] is not None
         assert data["template_id"] == tpl_id
-        assert data["output_pdf_path"] == "src/outputs/filled_output.pdf"
-        mock_controller["form_ctrl"].fill_form.assert_called_once()
+        assert data["input_text"] == "The employee is John Doe, email jdoe@ucsc.edu"
+        assert data["output_pdf_path"].endswith("_filled.pdf")
+        mock_controller["mock_fill"].assert_called_once()
+
+        fetched = db.get(FormSubmission, data["id"])
+        assert fetched.input_id == input_id
+
+    def test_fill_form_with_direct_input_text(self, client, mock_controller, db, tmp_path, monkeypatch):
+        monkeypatch.setattr("app.core.paths.PROJECT_ROOT", tmp_path)
+        pdf_file = tmp_path / "employee.pdf"
+        pdf_file.write_bytes(b"%PDF-1.4 fake")
+        tpl_id = self._seed_template_at(client, str(pdf_file.relative_to(tmp_path)))
+
+        resp = client.post(f"{API_PREFIX}/forms/fill", json={
+            "template_id": tpl_id,
+            "input_text": "Direct incident text narrative from user.",
+        })
+        assert resp.status_code == 200
+
+        data = resp.json()
+        assert data["id"] is not None
+        assert data["template_id"] == tpl_id
+        assert data["input_text"] == "Direct incident text narrative from user."
+        assert data["output_pdf_path"].endswith("_filled.pdf")
+
+        fetched = db.get(FormSubmission, data["id"])
+        assert fetched is not None
+        assert fetched.input_text == "Direct incident text narrative from user."
+        assert fetched.input_id is not None
+
 
     def test_fill_form_missing_template(self, client, mock_controller):
         resp = client.post(f"{API_PREFIX}/forms/fill", json={
             "template_id": 9999,
-            "input_text": "some text",
+            "input_id": str(uuid4()),
         })
         assert resp.status_code == 404
 
-    def test_fill_form_template_file_not_found(self, client, mock_controller):
+    def test_fill_form_missing_input(self, client, mock_controller):
         tpl_id = self._seed_template(client, mock_controller)
-        mock_controller["form_ctrl"].fill_form.side_effect = FileNotFoundError("PDF template not found")
 
         resp = client.post(f"{API_PREFIX}/forms/fill", json={
             "template_id": tpl_id,
-            "input_text": "some text",
+            "input_id": str(uuid4()),
         })
+        assert resp.status_code == 404
+        assert resp.json()["error_code"] == "INPUT_NOT_FOUND"
+
+    def test_fill_form_input_transcribing(self, client, mock_controller, db):
+        """An input still being transcribed is not usable yet → 409."""
+        tpl_id = self._seed_template(client, mock_controller)
+        input_id = self._seed_input(db, status=InputStatus.transcribing, transcript=None)
+
+        resp = client.post(f"{API_PREFIX}/forms/fill", json={
+            "template_id": tpl_id,
+            "input_id": str(input_id),
+        })
+        assert resp.status_code == 409
+        body = resp.json()
+        assert body["error_code"] == "INPUT_NOT_READY"
+        assert body["detail"]["status"] == "transcribing"
+
+    def test_fill_form_input_failed(self, client, mock_controller, db):
+        """An input whose transcription failed is never usable → 409."""
+        tpl_id = self._seed_template(client, mock_controller)
+        input_id = self._seed_input(db, status=InputStatus.failed, transcript=None)
+
+        resp = client.post(f"{API_PREFIX}/forms/fill", json={
+            "template_id": tpl_id,
+            "input_id": str(input_id),
+        })
+        assert resp.status_code == 409
+        body = resp.json()
+        assert body["error_code"] == "INPUT_NOT_READY"
+        assert body["detail"]["status"] == "failed"
+
+    def test_fill_form_template_file_not_found(self, client, mock_controller, db):
+        # Template with a non-existent PDF path → service raises FileNotFoundError
+        tpl_id = self._seed_template(client, mock_controller)
+        input_id = self._seed_input(db)
+
+        resp = client.post(f"{API_PREFIX}/forms/fill", json={
+            "template_id": tpl_id,
+            "input_id": str(input_id),
+        })
+        # The service detects the missing PDF before calling filler.fill
         assert resp.status_code == 500
         assert resp.json()["error_code"] == "FORM_FILL_ERROR"
-        assert "PDF template not found" in resp.json()["message"]
 
     def test_fill_form_validates_body(self, client):
         """Missing required fields → 422 with contract envelope."""
@@ -282,17 +386,22 @@ class TestFormEndpoints:
         assert resp.status_code == 200
         assert resp.json()["models"] == ["qwen2.5:1.5b"]
 
-    def test_fill_form_passes_model_override(self, client, mock_controller):
-        """A `model` in the request reaches Controller.fill_form but isn't persisted."""
-        tpl_id = self._seed_template(client, mock_controller)
+    def test_fill_form_passes_model_override(self, client, mock_controller, db, tmp_path, monkeypatch):
+        """A `model` in the request reaches filler.fill as a keyword argument."""
+        monkeypatch.setattr("app.core.paths.PROJECT_ROOT", tmp_path)
+        pdf_file = tmp_path / "employee.pdf"
+        pdf_file.write_bytes(b"%PDF-1.4 fake")
+        tpl_id = self._seed_template_at(client, str(pdf_file.relative_to(tmp_path)))
+        input_id = self._seed_input(db, transcript="John Doe")
         resp = client.post(f"{API_PREFIX}/forms/fill", json={
             "template_id": tpl_id,
-            "input_text": "John Doe",
+            "input_id": str(input_id),
             "model": "qwen2.5:3b",
         })
         assert resp.status_code == 200
-        _, kwargs = mock_controller["form_ctrl"].fill_form.call_args
-        assert kwargs["model"] == "qwen2.5:3b"
+        # filler.fill is called as fill(pdf_path, narrative, out_path, model=...)
+        call_args = mock_controller["mock_fill"].call_args
+        assert call_args.kwargs.get("model") == "qwen2.5:3b" or call_args.args[3] == "qwen2.5:3b"
 
     def test_transcribe_service_unavailable(self, client, monkeypatch):
         """A down whisper service surfaces as a 503, not a 500."""
@@ -321,8 +430,9 @@ class TestE2EPipeline:
     """
 
     def test_full_flow(self, client, mock_controller, pdf_upload, tmp_path, monkeypatch, db):
+        monkeypatch.setattr("app.core.paths.PROJECT_ROOT", tmp_path)
+
         # -- Step 1: Upload a PDF --
-        monkeypatch.setattr("app.api.routes.templates.PROJECT_ROOT", tmp_path)
         upload_resp = client.post(
             f"{API_PREFIX}/templates/upload",
             files=[pdf_upload],
@@ -332,7 +442,7 @@ class TestE2EPipeline:
         uploaded_path = upload_resp.json()["pdf_path"]
         assert uploaded_path.endswith(".pdf")
 
-        # -- Step 2: Create a template from the uploaded PDF --
+        # -- Step 2: Create a template (fields explicit → extract_pdf_template not called) --
         create_resp = client.post(f"{API_PREFIX}/templates/create", json={
             "name": "Incident Report",
             "pdf_path": uploaded_path,
@@ -355,18 +465,28 @@ class TestE2EPipeline:
         assert any(t["id"] == template_id for t in templates)
 
         # -- Step 4: Fill the form --
-        fill_resp = client.post(f"{API_PREFIX}/forms/fill", json={
-            "template_id": template_id,
-            "input_text": (
+        input_record = Input(
+            input_type=InputType.text,
+            status=InputStatus.ready,
+            transcript=(
                 "Officer Jane Smith, badge 4521. On January 15 2025 at "
                 "123 Main St, a structure fire was reported. Two engines "
                 "responded, fire contained within 45 minutes."
             ),
+        )
+        db.add(input_record)
+        db.commit()
+        db.refresh(input_record)
+
+        fill_resp = client.post(f"{API_PREFIX}/forms/fill", json={
+            "template_id": template_id,
+            "input_id": str(input_record.input_id),
         })
         assert fill_resp.status_code == 200
         fill_data = fill_resp.json()
         assert fill_data["template_id"] == template_id
-        assert fill_data["output_pdf_path"] == "src/outputs/filled_output.pdf"
+        assert fill_data["output_pdf_path"].endswith("_filled.pdf")
+        mock_controller["mock_fill"].assert_called_once()
 
         # -- Step 5: Verify DB state --
         db_templates = list(db.exec(select(Template)))
@@ -375,4 +495,5 @@ class TestE2EPipeline:
         db_forms = list(db.exec(select(FormSubmission)))
         assert len(db_forms) == 1
         assert db_forms[0].template_id == template_id
+        assert db_forms[0].input_id == input_record.input_id
         assert "Jane Smith" in db_forms[0].input_text
