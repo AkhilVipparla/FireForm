@@ -1,18 +1,15 @@
-from pydantic import BaseModel, field_validator
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from app.api.schemas.enums import JobStatus, JobType
 
 
 class FormFill(BaseModel):
     template_id: int
-    input_text: str
+    input_text: str | None = None
+    input_id: UUID | None = None
     model: str | None = None
-
-    @field_validator("input_text")
-    def validate_input_text(cls, value):
-        if not value or not value.strip():
-            raise ValueError("Input text cannot be empty")
-        return value
 
 
 class FormFillResponse(BaseModel):
@@ -20,9 +17,9 @@ class FormFillResponse(BaseModel):
     template_id: int
     input_text: str
     output_pdf_path: str
+    values: dict | None = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class TranscriptionResponse(BaseModel):
@@ -36,14 +33,8 @@ class ModelsResponse(BaseModel):
 
 class AsyncFormFill(BaseModel):
     template_ids: list[int]
-    input_text: str
+    input_id: UUID
     model: str | None = None
-
-    @field_validator("input_text")
-    def validate_input_text(cls, value):
-        if not value or not value.strip():
-            raise ValueError("Input text cannot be empty")
-        return value
 
     @field_validator("template_ids")
     def validate_template_ids(cls, value):
